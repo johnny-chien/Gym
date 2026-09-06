@@ -824,7 +824,7 @@ The method is a single paired test on per-task mean scores (Evan Miller, "Adding
 - **No `--margin`**: two-sided test of "did anything change at all" — for repeatability checks (same benchmark/model run twice).
 - **`--margin DELTA`**: one-sided non-inferiority test of "is the candidate not meaningfully worse than `DELTA`" — for regression checks with a tolerance (e.g. FP4 quantization: is accuracy within 1pp of the baseline).
 
-Reports only the raw statistical output (n, mean difference, standard error, p-value, significant, minimum detectable effect at 80% power) — no PASS/WARN/FAIL verdict.
+Reports only the raw statistical output (n, mean difference, standard error, p-value, significant) — no PASS/WARN/FAIL verdict.
 
 | Option | Description |
 | --- | --- |
@@ -853,12 +853,14 @@ gym eval stat-test \
     --metric reward --margin 0.01
 ```
 
-Writes into `statistical_tests/` (or `--output-dir` directly, with no nesting, when given explicitly), with the filename indexed by this invocation's parameters — a rerun with a different `--metric`/`--margin`/`--alpha` against the same location writes an additional file rather than overwriting the previous one:
+Writes into `statistical_tests/` (or `--output-dir` directly, with no nesting, when given explicitly), with the filename indexed by everything that makes the invocation distinct — the run pair, the resolved agents, and `--test`/`--metric`/`--margin`/`--alpha`. Changing any of them writes an additional file rather than overwriting the previous one; rerunning the same invocation rewrites its own file in place:
 
 ```
-statistical_tests/paired__two-sided__alpha-0.05.{md,json}
-statistical_tests/paired__metric-reward__margin-0.01__alpha-0.05.{md,json}
+statistical_tests/paired__run_a-rollouts__run_b-rollouts__agent-default__two-sided__alpha-0.05.{md,json}
+statistical_tests/paired__run_a-rollouts__run_b-rollouts__agent-default__metric-reward__margin-0.01__alpha-0.05.{md,json}
 ```
+
+Each run is labelled by its directory and the rollouts stem, baseline first, so comparing the same candidate against a second baseline — or a second `--agent` within one run pair — lands beside the first report instead of replacing it. This is the one place `stat-test` departs from `gym eval compare`, which writes a fixed `compare_report.*` and covers every shared agent in that single report.
 
 ### `gym eval reverify`
 

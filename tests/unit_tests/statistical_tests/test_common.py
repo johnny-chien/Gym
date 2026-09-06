@@ -11,7 +11,7 @@ from nemo_gym.statistical_tests.common import (
     sanitize_filename_part,
     write_reports,
 )
-from nemo_gym.statistical_tests.schema import STATS_SUBDIR_NAME, StatTestConfig
+from nemo_gym.statistical_tests.schema import STATS_SUBDIR_NAME, StatTestConfig, StatTestReport
 from tests.unit_tests.test_compare import _entry, _group, _write_run
 
 
@@ -84,9 +84,71 @@ class TestLoadRunPair:
 
 
 class TestReportStem:
+    def _report(self, **kw) -> StatTestReport:
+        fields = {
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "nemo_gym_version": "0.0.0",
+            "command": "gym eval stat-test ...",
+            "test": "paired",
+            "baseline_rollouts_jsonl_fpath": "runs/run_a/rollouts.jsonl",
+            "baseline_aggregate_metrics_fpath": "runs/run_a/rollouts_aggregate_metrics.json",
+            "candidate_rollouts_jsonl_fpath": "runs/run_b/rollouts.jsonl",
+            "candidate_aggregate_metrics_fpath": "runs/run_b/rollouts_aggregate_metrics.json",
+            "baseline_agent": "default",
+            "candidate_agent": "default",
+            "baseline_task_count": 4,
+            "candidate_task_count": 4,
+        }
+        return StatTestReport(**{**fields, **kw})
+
     def test_leads_with_the_test_name_so_two_tests_cannot_overwrite_each_other(self):
         config = StatTestConfig.model_validate(BASE)
-        assert report_stem(config) == "paired__alpha-0.05"
+        stem = report_stem(config, self._report())
+        assert stem.startswith("paired__")
+        assert stem == "paired__run_a-rollouts__run_b-rollouts__agent-default__alpha-0.05"
+
+    def test_a_second_baseline_against_the_same_candidate_does_not_overwrite_the_first(self):
+        """The default output dir is the candidate's own, so only the stem separates two baselines."""
+        config = StatTestConfig.model_validate(BASE)
+        against_a = report_stem(config, self._report())
+        against_c = report_stem(config, self._report(baseline_rollouts_jsonl_fpath="runs/run_c/rollouts.jsonl"))
+        assert against_a != against_c
+
+    def test_a_second_candidate_under_one_output_dir_does_not_overwrite_the_first(self):
+        config = StatTestConfig.model_validate({**BASE, "output_dirpath": "/tmp/reports"})
+        into_b = report_stem(config, self._report())
+        into_d = report_stem(config, self._report(candidate_rollouts_jsonl_fpath="runs/run_d/rollouts.jsonl"))
+        assert into_b != into_d
+
+    def test_a_second_agent_on_the_same_run_pair_does_not_overwrite_the_first(self):
+        config = StatTestConfig.model_validate(BASE)
+        first = report_stem(config, self._report(baseline_agent="a1", candidate_agent="a1"))
+        second = report_stem(config, self._report(baseline_agent="a2", candidate_agent="a2"))
+        assert first != second
+        assert "agent-a1" in first and "agent-a2" in second
+
+    def test_a_cross_agent_pair_names_both_sides_in_baseline_then_candidate_order(self):
+        config = StatTestConfig.model_validate(BASE)
+        stem = report_stem(config, self._report(baseline_agent="a1", candidate_agent="a2"))
+        assert "agent-a1-vs-a2" in stem
+
+    def test_rerunning_the_same_invocation_reuses_the_same_filename(self):
+        config = StatTestConfig.model_validate(BASE)
+        assert report_stem(config, self._report()) == report_stem(config, self._report())
+
+    @pytest.mark.parametrize(
+        ("fpath", "expected"),
+        [
+            ("runs/run_a/rollouts.jsonl", "run_a-rollouts"),
+            ("a.jsonl", "a"),
+            ("runs/aime24_bf16.jsonl", "runs-aime24_bf16"),
+        ],
+    )
+    def test_each_run_is_labelled_by_its_directory_and_its_stem(self, fpath, expected):
+        """A flat layout has no per-run directory and a nested one always names the file `rollouts`,
+        so only the pair of them tells two runs apart."""
+        stem = report_stem(StatTestConfig.model_validate(BASE), self._report(baseline_rollouts_jsonl_fpath=fpath))
+        assert stem.split("__")[1] == expected
 
     @pytest.mark.parametrize(
         ("raw", "expected"),

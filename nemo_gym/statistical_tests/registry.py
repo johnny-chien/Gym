@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Sequence, Tuple, Type
+from typing import Any, Callable, Dict, List, Sequence, Tuple, Type
 
 from nemo_gym.cli.utils import did_you_mean
 from nemo_gym.config_types import ConfigError
@@ -40,11 +40,28 @@ def resolve_stat_test(name: str) -> StatTest:
     return STAT_TESTS[name]
 
 
+def build_config(test: StatTest, config_dict: Dict[str, Any]) -> StatTestConfig:
+    """Validate `config_dict` against `test`, rejecting another test's flags instead of ignoring them.
+
+    Pydantic drops unknown keys, so without this a flag belonging to a different test (`--margin` under
+    a test with no margin) would be accepted and silently have no effect. Derived from the registry, so
+    a new test needs no edit here.
+    """
+    own_fields = set(test.config_type.model_fields)
+    other_fields = {f for t in STAT_TESTS.values() for f in t.config_type.model_fields} - own_fields
+    unsupported = sorted(f for f in other_fields if config_dict.get(f) is not None)
+    if unsupported:
+        flags = ", ".join(f"--{f.replace('_', '-')}" for f in unsupported)
+        name = test.config_type.model_fields["test"].default
+        raise ConfigError(f"{flags} {'is' if len(unsupported) == 1 else 'are'} not a parameter of '{name}'.")
+    return test.config_type.model_validate(config_dict)
+
+
 def run_stat_test(test: StatTest, config: StatTestConfig, command: str) -> Tuple[StatTestReport, List[Path]]:
     report = test.build_report(config, command)
     return report, write_reports(
         resolve_output_dir(config),
-        report_stem(config),
+        report_stem(config, report),
         report_format=config.report_format,
         markdown=test.render_markdown(report),
         payload=report.model_dump(mode="json"),

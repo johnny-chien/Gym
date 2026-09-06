@@ -7,7 +7,7 @@ import pytest
 from nemo_gym.config_types import ConfigError
 from nemo_gym.statistical_tests import paired
 from nemo_gym.statistical_tests.paired import PairedTestConfig
-from nemo_gym.statistical_tests.registry import STAT_TESTS, StatTest, resolve_stat_test
+from nemo_gym.statistical_tests.registry import STAT_TESTS, StatTest, build_config, resolve_stat_test
 from nemo_gym.statistical_tests.schema import DEFAULT_STAT_TEST, StatTestConfig, StatTestReport
 
 
@@ -41,7 +41,7 @@ class TestStatTestRegistry:
 
     def test_stat_test_runs_the_test_the_name_selected(self, monkeypatch, capsys, tmp_path):
         """A stub entry must be dispatched to instead of the paired implementation."""
-        from nemo_gym.cli.eval import stat_test
+        from nemo_gym.cli.eval import _stat_test
         from nemo_gym.statistical_tests import registry
 
         stub_report = StatTestReport(
@@ -70,12 +70,13 @@ class TestStatTestRegistry:
             ),
         )
 
-        stat_test(PairedTestConfig.model_validate({**BASE, "output_dirpath": str(tmp_path)}))
+        _stat_test(PairedTestConfig.model_validate({**BASE, "output_dirpath": str(tmp_path)}), "stat-test")
 
         assert calls, "the registered build_report was never called -- dispatch is still hardcoded"
-        assert calls[0].startswith("gym eval compare")
+        assert calls[0].startswith("gym eval stat-test")
         assert "stub ran" in capsys.readouterr().out
-        assert (tmp_path / "paired__two-sided__alpha-0.05.md").read_text() == "stub markdown"
+        stem = "paired__a__b__agent-agent__two-sided__alpha-0.05"
+        assert (tmp_path / f"{stem}.md").read_text() == "stub markdown"
 
     def test_cli_test_flag_choices_match_the_registry(self):
         from nemo_gym.cli.main import COMMANDS
@@ -85,3 +86,50 @@ class TestStatTestRegistry:
             flag.register(parser)
         action = next(a for a in parser._actions if "--test" in a.option_strings)
         assert set(action.choices) == set(STAT_TESTS)
+
+
+class TestBuildConfig:
+    """`build_config` rejects another test's flags instead of letting pydantic drop them."""
+
+    def test_a_tests_own_flags_are_kept(self):
+        config = build_config(resolve_stat_test("paired"), {**BASE, "metric": ["reward"], "margin": 0.01})
+        assert config.metric == ["reward"]
+        assert config.margin == 0.01
+
+    def test_a_flag_the_selected_test_does_not_declare_is_an_error_not_a_silent_drop(self, monkeypatch):
+        from nemo_gym.statistical_tests import registry
+
+        class NoMarginConfig(StatTestConfig):
+            test: str = "no_margin"
+
+        no_margin = StatTest(
+            config_type=NoMarginConfig,
+            build_report=lambda config, command: None,
+            render_markdown=lambda report: "",
+            summary=lambda report, written: (),
+        )
+        monkeypatch.setitem(registry.STAT_TESTS, "no_margin", no_margin)
+
+        # Without the guard pydantic would ignore both keys and report a two-sided test on every metric.
+        with pytest.raises(ConfigError) as excinfo:
+            build_config(no_margin, {**BASE, "test": "no_margin", "margin": 0.01, "metric": ["reward"]})
+        assert "--margin, --metric are not a parameter of 'no_margin'" in str(excinfo.value)
+
+        assert build_config(no_margin, {**BASE, "test": "no_margin"}).test == "no_margin"
+
+    def test_unset_flags_from_other_tests_are_ignored(self, monkeypatch):
+        from nemo_gym.statistical_tests import registry
+
+        class NoMarginConfig(StatTestConfig):
+            test: str = "no_margin"
+
+        no_margin = StatTest(
+            config_type=NoMarginConfig,
+            build_report=lambda config, command: None,
+            render_markdown=lambda report: "",
+            summary=lambda report, written: (),
+        )
+        monkeypatch.setitem(registry.STAT_TESTS, "no_margin", no_margin)
+
+        # `gym eval compare` always relays metric/margin, unset as None -- that must not trip the guard.
+        assert build_config(no_margin, {**BASE, "test": "no_margin", "margin": None, "metric": None})

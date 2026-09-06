@@ -668,7 +668,10 @@ _EVAL_RUN_SELECTION_FLAGS = (
     ),
 )
 
-# Statistical-test flags shared by `eval compare` (its default stats step) and `eval stat-test`.
+# Statistical-test flags on both `eval compare` (its default stats step) and `eval stat-test`.
+# `--metric`/`--margin` belong to `paired`; a test that does not declare them rejects them rather
+# than ignoring them (`statistical_tests.registry.build_config`). A test-specific knob needs no flag
+# here at all -- it rides in through Hydra as `+<field>=<value>`.
 _STATISTICAL_TEST_FLAGS = (
     _comma_list_flag(
         "metric",

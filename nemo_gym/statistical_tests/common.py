@@ -18,7 +18,7 @@ from nemo_gym.comparison.schema import RunFile
 from nemo_gym.config_types import ConfigError
 from nemo_gym.package_info import __version__
 from nemo_gym.secret_utils import hide_secrets_in_overrides
-from nemo_gym.statistical_tests.schema import STATS_SUBDIR_NAME, StatTestConfig
+from nemo_gym.statistical_tests.schema import STATS_SUBDIR_NAME, StatTestConfig, StatTestReport
 
 
 MISSING = "—"
@@ -85,7 +85,7 @@ def load_run_pair(config: StatTestConfig) -> RunPair:
     )
     if len(selections) != 1:
         raise ConfigError(
-            "gym eval stat-test compares exactly one agent pair; narrow the selection with --agent, "
+            "a statistical test compares exactly one agent pair; narrow the selection with --agent, "
             "--baseline-agent, or --candidate-agents."
         )
     s = selections[0]
@@ -108,8 +108,13 @@ def sanitize_filename_part(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.+-]+", "-", text).strip("-")
 
 
-def report_stem(config: StatTestConfig) -> str:
-    return "__".join([sanitize_filename_part(config.test), *config.filename_parts(), f"alpha-{config.alpha:g}"])
+def report_stem(config: StatTestConfig, report: StatTestReport) -> str:
+    """Names the run pair and agents too, so a second baseline/candidate/agent lands beside it, not on it."""
+    runs = (report.baseline_rollouts_jsonl_fpath, report.candidate_rollouts_jsonl_fpath)
+    agents = dict.fromkeys([report.baseline_agent, report.candidate_agent])
+    parts = [config.test, *(f"{Path(r).parent.name}-{Path(r).stem}" for r in runs)]
+    parts += [f"agent-{'-vs-'.join(agents)}", *config.filename_parts(), f"alpha-{config.alpha:g}"]
+    return "__".join(sanitize_filename_part(p) for p in parts)
 
 
 def resolve_output_dir(config: StatTestConfig) -> Path:

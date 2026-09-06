@@ -1136,3 +1136,44 @@ class TestStatsWiring:
         assert payload["results"][0]["metric"] == "reward"
         assert payload["results"][0]["margin"] == 0.5
         assert payload["results"][0]["alpha"] == 0.2
+
+    def _config_without_pairing_data(self, tmp_path: Path) -> ComparisonConfig:
+        """A run pair `compare` handles fine but the stats step cannot test: no per-task groups."""
+        baseline = _write_run(
+            tmp_path, "run_a", [_entry(agent_metrics={"mean/reward": 0.75}, key_metrics={"mean/reward": 0.75})]
+        )
+        candidate = _write_run(
+            tmp_path, "run_b", [_entry(agent_metrics={"mean/reward": 0.5}, key_metrics={"mean/reward": 0.5})]
+        )
+        return ComparisonConfig.model_validate(
+            {
+                "baseline_rollouts_jsonl_fpath": str(baseline),
+                "candidate_rollouts_jsonl_fpaths": [str(candidate)],
+            }
+        )
+
+    def test_a_stats_step_that_cannot_run_is_reported_and_skipped_not_fatal(self, tmp_path, capsys):
+        """The stats step is a side effect of a comparison that already succeeded and was written.
+
+        It must never turn a good `gym eval compare` into a non-zero exit -- `stat_test`'s own
+        `exit_cleanly_on_config_error` would otherwise raise SystemExit(1) from inside `compare`.
+        """
+        from nemo_gym.cli.eval import _run_stats_step_for_compare
+
+        config = self._config_without_pairing_data(tmp_path)
+        run_comparison(config, "gym eval compare ...")
+
+        _run_stats_step_for_compare(config, {})
+
+        assert "Skipped the statistical test" in capsys.readouterr().out
+        assert not (tmp_path / "run_b" / "statistical_tests").exists()
+
+    def test_an_invalid_stats_flag_is_reported_and_skipped_not_a_traceback(self, tmp_path, capsys):
+        from nemo_gym.cli.eval import _run_stats_step_for_compare
+
+        config = self._config(tmp_path)
+        run_comparison(config, "gym eval compare ...")
+
+        _run_stats_step_for_compare(config, {"alpha": 5.0})
+
+        assert "Skipped the statistical test" in capsys.readouterr().out

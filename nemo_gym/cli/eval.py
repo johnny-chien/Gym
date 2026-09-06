@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from copy import deepcopy
 from multiprocessing import Pool
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from omegaconf import DictConfig, OmegaConf, open_dict
 from pydantic import Field
@@ -603,22 +603,28 @@ Repeat-level metrics: {repeat_level_metrics_fpath}""")
 
 
 def _run_stats_step_for_compare(config: Any, overrides: Dict[str, Any]) -> None:
-    """Build the `stat-test` config for `gym eval compare`'s default stats step and run it.
+    """Run `gym eval compare`'s default statistics step.
 
-    `overrides` carries the raw stats-flag values off `eval compare`'s own global config dict
-    (`metric`/`margin`/`alpha`/`stats_output_dirpath`) -- `stats_output_dirpath` is remapped to
-    `output_dirpath` here since `--output-dir` on `compare` must keep controlling only
-    `compare_report.*`, not this step's own output location.
+    `--output-dir` on `compare` keeps controlling only `compare_report.*`, so this step's own
+    location comes from `stats_output_dirpath` instead. The step is a side effect layered on a
+    comparison that already succeeded and was written, so a bad config here is reported and
+    skipped rather than allowed to fail the whole command.
     """
-    from nemo_gym.statistical_tests.registry import resolve_stat_test
+    import rich
+    from pydantic import ValidationError
+    from rich.markup import escape
+
+    from nemo_gym.statistical_tests.registry import build_config, resolve_stat_test
     from nemo_gym.statistical_tests.schema import DEFAULT_STAT_TEST
 
     stats_config_dict = config.model_dump(exclude={"output_dirpath"})
     stats_config_dict.update({k: v for k, v in overrides.items() if k != "stats_output_dirpath"})
-    if overrides.get("stats_output_dirpath"):
-        stats_config_dict["output_dirpath"] = overrides["stats_output_dirpath"]
-    test = resolve_stat_test(stats_config_dict.get("test") or DEFAULT_STAT_TEST)
-    stat_test(test.config_type.model_validate(stats_config_dict))
+    stats_config_dict["output_dirpath"] = overrides.get("stats_output_dirpath")
+    try:
+        test = resolve_stat_test(stats_config_dict.get("test") or DEFAULT_STAT_TEST)
+        _stat_test(build_config(test, stats_config_dict), "compare")
+    except (ConfigError, ValidationError) as e:
+        rich.print(f"[yellow]Skipped the statistical test:[/yellow] {escape(str(e))}")
 
 
 @exit_cleanly_on_config_error
@@ -648,21 +654,21 @@ def compare() -> None:  # pragma: no cover
         )
 
 
-@exit_cleanly_on_config_error
-def stat_test(config: Optional[Any] = None) -> None:  # pragma: no cover
+def _stat_test(config: Any, subcommand: str) -> None:
     from nemo_gym.statistical_tests.common import invoked_command
     from nemo_gym.statistical_tests.registry import resolve_stat_test, run_stat_test
+
+    test = resolve_stat_test(config.test)
+    # Record whichever command actually ran: sys.argv holds *its* overrides, not stat-test's.
+    report, written = run_stat_test(test, config, invoked_command(subcommand))
+    print("\n".join(test.summary(report, written)))
+
+
+@exit_cleanly_on_config_error
+def stat_test() -> None:  # pragma: no cover
+    from nemo_gym.statistical_tests.registry import build_config, resolve_stat_test
     from nemo_gym.statistical_tests.schema import DEFAULT_STAT_TEST
 
-    standalone = config is None
-    if standalone:
-        global_config_dict = get_global_config_dict()
-        test = resolve_stat_test(global_config_dict.get("test") or DEFAULT_STAT_TEST)
-        config = test.config_type.model_validate(global_config_dict)
-    else:
-        test = resolve_stat_test(config.test)
-
-    # Record whichever command actually ran: sys.argv holds *its* overrides, not stat-test's.
-    report, written = run_stat_test(test, config, invoked_command("stat-test" if standalone else "compare"))
-
-    print("\n".join(test.summary(report, written)))
+    global_config_dict = get_global_config_dict()
+    test = resolve_stat_test(global_config_dict.get("test") or DEFAULT_STAT_TEST)
+    _stat_test(build_config(test, global_config_dict), "stat-test")
